@@ -90,7 +90,7 @@ Insights só aparecem com dados suficientes: três adiamentos da mesma tarefa; q
 
 ## Validação
 
-43 testes: os 17 originais e 26 testes adicionais de timeline, orçamento com pausas, comparação de rotas, memória, tempo extra, insights e migração. `pnpm build` verifica TypeScript estrito e gera a interface.
+44 testes: os 17 originais e 27 testes adicionais de timeline, orçamento com pausas, comparação de rotas, memória, tempo extra, insights e migração. `pnpm build` verifica TypeScript estrito e gera a interface.
 
 Para uma verificação automatizada do executável, defina `ORBIT_SMOKE_REPORT` com um caminho absoluto para um arquivo de relatório antes de abrir o app. O modo de verificação carrega a interface, aguarda a persistência, registra plataforma/versão e encerra. Sem essa variável, o app abre normalmente. A verificação não cria histórico de estudo fictício.
 

@@ -366,7 +366,11 @@ export default function App() {
       className={`app-shell desktop-shell ${isTauri() ? "native-app" : ""} ${isTauri() && /Mac/.test(navigator.platform) ? "mac-app" : ""} ${page === "Foco" ? "in-focus" : ""}`}
     >
       <aside className="sidebar">
-        <button className="brand" onClick={() => setPage("Hoje")}>
+        <button
+          className="brand"
+          aria-label="Orbit — Hoje"
+          onClick={() => setPage("Hoje")}
+        >
           <Orbit size={25} strokeWidth={1.4} />
           <span>Orbit</span>
           <span className="desktop-tag">ESTUDO</span>
@@ -379,6 +383,7 @@ export default function App() {
           {pages.map(({ name, icon: Icon }) => (
             <button
               key={name}
+              aria-label={name}
               className={`nav-item ${page === name ? "active" : ""}`}
               aria-current={page === name ? "page" : undefined}
               onClick={() => setPage(name)}
@@ -418,7 +423,11 @@ export default function App() {
           ))}
         </div>
         <div className="sidebar-bottom">
-          <button className="sidebar-command" onClick={() => setPalette(true)}>
+          <button
+            className="sidebar-command"
+            aria-label="Abrir ações rápidas"
+            onClick={() => setPalette(true)}
+          >
             <Search size={15} />
             <span>Ações rápidas</span>
             <kbd>{/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd>

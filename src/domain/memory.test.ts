@@ -75,3 +75,24 @@ it("tempo pausado não conta como estudo", () => {
     archiveFocus(data, "ended", now).memory.sessions[0].actualSeconds,
   ).toBe(50);
 });
+it("uma tarefa reaberta não soma sessões da conclusão anterior", () => {
+  const first = completeTask(active(), "1", now);
+  const secondStart = new Date(2026, 9, 5, 11, 0);
+  const reopened = {
+    ...first,
+    tasks: first.tasks.map((t) =>
+      t.id === "1"
+        ? { ...t, status: "pending" as const, completedAt: undefined }
+        : t,
+    ),
+    focus: {
+      ...active().focus!,
+      id: "second",
+      startedAt: secondStart.toISOString(),
+      runningSince: secondStart.getTime(),
+    },
+  };
+  const done = completeTask(reopened, "1", new Date(2026, 9, 5, 11, 10));
+  expect(done.memory.events[1].actualSeconds).toBe(600);
+  expect(done.memory.sessions).toHaveLength(2);
+});

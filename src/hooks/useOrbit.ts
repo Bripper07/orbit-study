@@ -128,7 +128,13 @@ export function useOrbit() {
         },
       };
     });
-  const endFocus = () => update((d) => archiveFocus(d, "ended"));
+  const endFocus = () =>
+    update((d) => ({
+      ...archiveFocus(d, "ended"),
+      routeStartAt: new Date(
+        Math.max(Date.now(), new Date(d.routeStartAt).getTime()),
+      ).toISOString(),
+    }));
   const defer = (id: string) => update((d) => deferTask(d, id));
   const logStuck = (task: Task) => {
     const event = memoryEvent(task, "stuck");

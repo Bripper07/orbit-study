@@ -63,7 +63,15 @@ export function completeTask(
   if (!task || task.status === "completed") return data;
   const archived =
     data.focus?.taskId === id ? archiveFocus(data, "completed", now) : data;
-  const observed = archived.memory.sessions.filter((s) => s.taskId === id);
+  const lastCompletion = data.memory.events
+    .filter((e) => e.taskId === id && e.kind === "completed")
+    .reduce(
+      (latest, e) => Math.max(latest, new Date(e.occurredAt).getTime()),
+      0,
+    );
+  const observed = archived.memory.sessions.filter(
+    (s) => s.taskId === id && new Date(s.startedAt).getTime() > lastCompletion,
+  );
   const event = {
     ...memoryEvent(task, "completed", now),
     estimatedMinutes: task.estimatedMinutes,

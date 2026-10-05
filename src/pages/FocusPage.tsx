@@ -1,158 +1,159 @@
-import type { AppData, Task, Subject, FocusSession, Page } from "../types";
+import type { Task, Subject, FocusSession } from "../types";
 import {
-  ScanLine,
-  ArrowUpRight,
   Play,
   Pause,
   Check,
   CircleHelp,
+  ArrowRight,
+  ScanLine,
 } from "lucide-react";
 interface Props {
   activeTask: Task | undefined;
   session: FocusSession | null;
   subject: (id: string) => Subject | undefined;
-  remaining: number;
-  progress: number;
+  actualSeconds: number;
   pause: () => void;
-  update: (fn: (data: AppData) => AppData) => void;
-  toggleTask: (id: string) => void;
-  setNotice: (message: string) => void;
-  setPage: (page: Page) => void;
+  resume: () => void;
+  onComplete: () => void;
+  onEnd: () => void;
   openDebug: () => void;
   recommended: Task | null;
   start: (task: Task) => void;
+  onTasks: () => void;
+  completion: string | null;
 }
 export function FocusPage({
   activeTask,
   session,
   subject,
-  remaining,
-  progress,
+  actualSeconds,
   pause,
-  update,
-  toggleTask,
-  setNotice,
-  setPage,
+  resume,
+  onComplete,
+  onEnd,
   openDebug,
   recommended,
   start,
+  onTasks,
+  completion,
 }: Props) {
-  return (
-    <>
-      {activeTask && session ? (
-        <div className="focus-view">
-          <div className="eyebrow">
-            <span className="live-dot" /> UM PASSO É O SUFICIENTE
-          </div>
-          <span className="focus-subject subject-label">
-            <i
-              style={{
-                background: subject(activeTask.subjectId)?.color,
-              }}
-            />
-            {subject(activeTask.subjectId)?.name}
-          </span>
-          <h1>{activeTask.title}</h1>
-          <p>
-            {Math.round(session.durationSeconds / 60)} minutos reservados para
-            este momento.
-          </p>
-          <div
-            className="timer-ring"
-            style={{ "--progress": `${progress}%` } as React.CSSProperties}
-          >
-            <div>
-              <span className="timer">
-                {String(Math.floor(remaining / 60)).padStart(2, "0")}
-                <span>:</span>
-                {String(remaining % 60).padStart(2, "0")}
-              </span>
-              <small>
-                {remaining === 0
-                  ? "Sessão finalizada"
-                  : session.runningSince === null
-                    ? "No seu tempo · pausado"
-                    : "Respire. Só esta tarefa agora."}
-              </small>
-            </div>
-          </div>
-          <div className="focus-controls">
-            <button
-              className="button"
-              disabled={remaining === 0}
-              onClick={() =>
-                session.runningSince === null
-                  ? update((d) => ({
-                      ...d,
-                      focus: d.focus
-                        ? { ...d.focus, runningSince: Date.now() }
-                        : null,
-                    }))
-                  : pause()
-              }
-            >
-              {session.runningSince === null ? (
-                <Play size={17} />
-              ) : (
-                <Pause size={17} />
-              )}{" "}
-              {session.runningSince === null ? "Retomar" : "Pausar"}
-            </button>
+  if (completion)
+    return (
+      <div className="focus-completion">
+        <span className="completion-check">
+          <Check size={30} strokeWidth={1.3} />
+        </span>
+        <span className="eyebrow">UM PASSO CONCLUÍDO</span>
+        <h1>{completion}</h1>
+        <p>Você abriu espaço para o que vem agora.</p>
+        {recommended ? (
+          <>
+            <span className="completion-next">PRÓXIMO NA SUA ROTA</span>
+            <h2>{recommended.title}</h2>
+            <span className="muted">
+              {recommended.estimatedMinutes} min ·{" "}
+              {subject(recommended.subjectId)?.name}
+            </span>
             <button
               className="button primary"
-              onClick={() => {
-                toggleTask(activeTask.id);
-                setNotice("Mais um passo concluído. Boa!");
-                setPage("Hoje");
-              }}
+              onClick={() => start(recommended)}
             >
-              <Check size={18} />
-              Concluir tarefa
+              Continuar minha rota
+              <ArrowRight size={16} />
             </button>
-          </div>
-          <button className="stuck-button" onClick={openDebug}>
-            <CircleHelp size={18} />
-            Estou travado
-            <ArrowUpRight size={16} />
+          </>
+        ) : (
+          <button className="button" onClick={onTasks}>
+            Voltar ao To-do
           </button>
-          <button
-            className="text-button end-session"
-            onClick={() => {
-              update((d) => ({ ...d, focus: null }));
-              setPage("Hoje");
-              setNotice("Sessão encerrada. A tarefa continua pendente.");
-            }}
-          >
-            Encerrar sessão e voltar à rota
-          </button>
-          {activeTask.description && (
-            <div className="focus-note">
-              <span>UMA LEMBRANÇA PARA COMEÇAR</span>
-              <p>{activeTask.description}</p>
-            </div>
-          )}
+        )}
+      </div>
+    );
+  if (!activeTask || !session)
+    return (
+      <div className="large-empty focus-empty">
+        <ScanLine size={35} strokeWidth={1.2} />
+        <h1>Uma coisa de cada vez.</h1>
+        <p>
+          {recommended
+            ? recommended.title
+            : "Escolha seu próximo passo para iniciar uma sessão."}
+        </p>
+        <button
+          className="button primary"
+          onClick={() => (recommended ? start(recommended) : onTasks())}
+        >
+          <Play size={15} />
+          {recommended ? "Começar a focar" : "Escolher tarefa"}
+        </button>
+      </div>
+    );
+  const remaining = Math.max(0, session.durationSeconds - actualSeconds);
+  const overtime = Math.max(0, actualSeconds - session.durationSeconds);
+  const display = overtime || remaining;
+  const progress = Math.min(
+    100,
+    (actualSeconds / session.durationSeconds) * 100,
+  );
+  return (
+    <div className="focus-view desktop-focus">
+      <span className="focus-subject subject-label">
+        <i style={{ background: subject(activeTask.subjectId)?.color }} />
+        {subject(activeTask.subjectId)?.name}
+      </span>
+      <h1>{activeTask.title}</h1>
+      <p>{Math.round(session.durationSeconds / 60)} min nesta sessão</p>
+      <div
+        className={`focus-clock ${session.runningSince === null ? "paused" : ""}`}
+      >
+        <span className="timer">
+          {overtime > 0 ? "+" : ""}
+          {String(Math.floor(display / 60)).padStart(2, "0")}
+          <span>:</span>
+          {String(display % 60).padStart(2, "0")}
+        </span>
+        <div
+          className="focus-track"
+          role="progressbar"
+          aria-label="Progresso da sessão"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
+        >
+          <span style={{ width: `${progress}%` }} />
         </div>
-      ) : (
-        <div className="large-empty focus-empty">
-          <ScanLine size={42} strokeWidth={1} />
-          <div className="eyebrow">ENCONTRE SEU RITMO</div>
-          <h1>Espaço para uma coisa só.</h1>
-          <p>
-            {recommended
-              ? `Seu próximo passo: ${recommended.title}`
-              : "Escolha uma tarefa no To-do para começar uma sessão."}
-          </p>
-          <button
-            className="button primary"
-            onClick={() =>
-              recommended ? start(recommended) : setPage("To-do")
-            }
-          >
+        <span className="focus-status">
+          {session.runningSince === null
+            ? "Pausado · retome no seu ritmo"
+            : remaining === 0
+              ? "Seu tempo planejado terminou. Conclua quando estiver pronto."
+              : "Só este momento. Só esta tarefa."}
+        </span>
+      </div>
+      <div className="focus-controls">
+        <button
+          className="button"
+          onClick={session.runningSince === null ? resume : pause}
+        >
+          {session.runningSince === null ? (
             <Play size={16} />
-            {recommended ? "Iniciar meu próximo passo" : "Escolher tarefa"}
-          </button>
-        </div>
-      )}
-    </>
+          ) : (
+            <Pause size={16} />
+          )}{" "}
+          {session.runningSince === null ? "Retomar" : "Pausar"}
+        </button>
+        <button className="button primary" onClick={onComplete}>
+          <Check size={17} />
+          Concluir
+        </button>
+      </div>
+      <button className="stuck-inline" onClick={openDebug}>
+        <CircleHelp size={16} />
+        Estou travado
+      </button>
+      <button className="text-button end-session" onClick={onEnd}>
+        Encerrar sessão
+      </button>
+    </div>
   );
 }

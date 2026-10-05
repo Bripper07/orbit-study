@@ -13,6 +13,9 @@ export function Modal({
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
+    dialog
+      .querySelector<HTMLInputElement>('input:not([type="hidden"]),textarea')
+      ?.focus();
     return () => dialog.close();
   }, []);
   return (

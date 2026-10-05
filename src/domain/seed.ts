@@ -8,7 +8,14 @@ export function createSeed(): AppData {
   };
   const createdAt = new Date().toISOString();
   return {
-    version: 1,
+    version: 2,
+    memory: { sessions: [], events: [] },
+    settings: {
+      name: "Bruno",
+      startTime: new Date().toTimeString().slice(0, 5),
+      breakMinutes: 5,
+    },
+    routeStartAt: new Date().toISOString(),
     theme: "dark",
     dailyMinutes: 180,
     deferredIds: [],

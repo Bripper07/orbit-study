@@ -1,8 +1,5 @@
-import { TodayPage } from "./pages/TodayPage";
-import { TodoPage } from "./pages/TodoPage";
-import { RadarPage } from "./pages/RadarPage";
-import { FocusPage } from "./pages/FocusPage";
 import { useEffect, useState } from "react";
+import { isTauri, invoke } from "@tauri-apps/api/core";
 import {
   Orbit,
   House,
@@ -12,34 +9,38 @@ import {
   Plus,
   Sun,
   Moon,
-  ArrowRight,
+  Search,
+  Settings2,
   Check,
-  ChevronRight,
-  Sprout,
   X,
 } from "lucide-react";
-import { elapsedFocusSeconds } from "./domain/focus";
-import type { Subject, Task, Page } from "./types";
+import type { Task, Subject, Page, BlockerReason, AppData } from "./types";
 import { useOrbit } from "./hooks/useOrbit";
+import { actualFocusSeconds } from "./domain/focus";
+import { calculateTaskRisk, dateKey } from "./domain/planner";
 import {
-  calculateTaskRisk,
-  dateKey,
-  generateDailyPlan,
-  getRecommendedTask,
-  replanDay,
-} from "./domain/planner";
-import { blockers } from "./domain/debugger";
-import { Modal } from "./components/Modal";
-import { TaskForm } from "./components/TaskForm";
+  generateStudyRoute,
+  generateDailyTimeline,
+  type TimelineItem,
+} from "./domain/timeline";
+import { usedStudyMinutes, archiveFocus, deferTask } from "./domain/memory";
+import { TodayPage } from "./pages/TodayPage";
+import { TodoPage } from "./pages/TodoPage";
+import { RadarPage } from "./pages/RadarPage";
+import { FocusPage } from "./pages/FocusPage";
 import { TaskRow } from "./components/TaskRow";
-
+import { TaskForm } from "./components/TaskForm";
+import { Modal } from "./components/Modal";
+import { CommandPalette, type Command } from "./components/CommandPalette";
+import { DebuggerPanel } from "./components/DebuggerPanel";
+import { RouteComparison } from "./components/RouteComparison";
+import { SettingsPanel } from "./components/SettingsPanel";
 const pages = [
   { name: "Hoje" as const, icon: House },
   { name: "To-do" as const, icon: ListTodo },
   { name: "Radar" as const, icon: Radar },
   { name: "Foco" as const, icon: ScanLine },
 ];
-
 export default function App() {
   const {
     data,
@@ -47,9 +48,16 @@ export default function App() {
     saveTask,
     toggleTask,
     deleteTask,
+    startFocus,
+    endFocus,
+    defer,
+    logStuck,
+    selectReason,
     error,
     canSave,
     enableSaving,
+    loading,
+    flush,
   } = useOrbit();
   const [page, setPage] = useState<Page>("Hoje");
   const [editing, setEditing] = useState<Task | null | undefined>();
@@ -57,8 +65,6 @@ export default function App() {
   const [subjectName, setSubjectName] = useState("");
   const [subjectColor, setSubjectColor] = useState("#b8b4e9");
   const [deleting, setDeleting] = useState<Task | null>(null);
-  const [debug, setDebug] = useState(false);
-  const [blocker, setBlocker] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("pending");
@@ -66,14 +72,34 @@ export default function App() {
   const [clock, setClock] = useState(Date.now());
   const [timeModal, setTimeModal] = useState(false);
   const [available, setAvailable] = useState(data.dailyMinutes);
+  const [palette, setPalette] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [debugTask, setDebugTask] = useState<Task | null>(null);
+  const [blocker, setBlocker] = useState<BlockerReason | null>(null);
+  const [stuckEventId, setStuckEventId] = useState("");
+  const [comparison, setComparison] = useState<{
+    before: TimelineItem[];
+    after: TimelineItem[];
+  } | null>(null);
+  const [completion, setCompletion] = useState<string | null>(null);
   const now = new Date(clock);
-  const plan = generateDailyPlan(
+  const availableMinutes = Math.max(
+    0,
+    data.dailyMinutes - usedStudyMinutes(data, now),
+  );
+  const plan = generateStudyRoute(
     data.tasks,
-    data.dailyMinutes,
+    availableMinutes,
     now,
     data.deferredIds,
+    data.settings.breakMinutes,
   );
-  const recommended = getRecommendedTask(plan);
+  const activeTask = data.tasks.find(
+    (t) => t.id === data.focus?.taskId && t.status === "pending",
+  );
+  const session = activeTask ? data.focus : null;
+  const recommended = activeTask ?? plan.today[0] ?? null;
+  const elapsed = actualFocusSeconds(session, clock);
   const risks = data.tasks.filter(
     (t) => t.status === "pending" && calculateTaskRisk(t, now) === "alto",
   );
@@ -84,85 +110,212 @@ export default function App() {
       dateKey(new Date(t.completedAt)) === dateKey(now),
   ).length;
   const subject = (id: string) => data.subjects.find((s) => s.id === id);
-  const activeTask = data.tasks.find(
-    (t) => t.id === data.focus?.taskId && t.status === "pending",
-  );
-  const session = activeTask ? data.focus : null;
-  const elapsed = elapsedFocusSeconds(session, clock);
-  const remaining = session
-    ? Math.max(0, session.durationSeconds - elapsed)
-    : 0;
-  const progress = session
-    ? Math.min(100, (elapsed / session.durationSeconds) * 100)
-    : 0;
+  const toggleTheme = () =>
+    update((d) => ({ ...d, theme: d.theme === "dark" ? "light" : "dark" }));
+  useEffect(() => {
+    if (loading || !canSave || !isTauri()) return;
+    let active = true;
+    invoke<boolean>("is_smoke_mode")
+      .then(async (smoke) => {
+        if (!smoke || !active) return;
+        await flush();
+        if (active)
+          await invoke("smoke_report", {
+            result: {
+              title: document.title,
+              interfaceLoaded: !!document.querySelector(".native-app"),
+              taskCount: data.tasks.length,
+              memoryReady: !!data.memory,
+              theme: data.theme,
+            },
+          });
+      })
+      .catch(() =>
+        setNotice("Não foi possível concluir a verificação nativa."),
+      );
+    return () => {
+      active = false;
+    };
+  }, [loading, canSave, flush, data.tasks.length, data.memory, data.theme]);
   useEffect(() => {
     document.documentElement.dataset.theme = data.theme;
+    if (isTauri())
+      import("@tauri-apps/api/window")
+        .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(data.theme))
+        .catch(() => {});
   }, [data.theme]);
   useEffect(() => {
-    const id = window.setInterval(() => setClock(Date.now()), 1000);
+    const id = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
     if (!notice) return;
-    const id = setTimeout(() => setNotice(""), 5000);
+    const id = setTimeout(() => setNotice(""), 4500);
     return () => clearTimeout(id);
   }, [notice]);
   useEffect(() => {
-    if (session?.runningSince !== null && session && remaining === 0)
-      update((d) => ({
-        ...d,
-        focus: d.focus
-          ? {
-              ...d.focus,
-              elapsedSeconds: d.focus.durationSeconds,
-              runningSince: null,
-            }
-          : null,
-      }));
-  }, [remaining, session, update]);
+    if (!isTauri() || loading || !canSave) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      const win = getCurrentWindow();
+      const listener = await win.onCloseRequested(async (event) => {
+        event.preventDefault();
+        try {
+          await flush();
+          await win.destroy();
+        } catch {
+          setNotice(
+            "Seus dados ainda não foram salvos. Exporte uma cópia antes de fechar.",
+          );
+        }
+      });
+      if (disposed) listener();
+      else unlisten = listener;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [loading, canSave, flush]);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (document.querySelector("dialog[open]") && !palette) return;
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPalette((p) => !p);
+      }
+      if (event.key.toLowerCase() === "n" && !palette) {
+        event.preventDefault();
+        setEditing(null);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [palette]);
   function start(task: Task) {
     if (session && session.taskId !== task.id) {
-      setNotice("Encerre a sessão atual antes de iniciar outra tarefa.");
+      setNotice("Encerre a sessão atual antes de começar outro passo.");
       setPage("Foco");
       return;
     }
-    update((d) => ({
-      ...d,
-      focus:
-        d.focus?.taskId === task.id
-          ? d.focus
-          : {
-              taskId: task.id,
-              durationSeconds: task.estimatedMinutes * 60,
-              elapsedSeconds: 0,
-              runningSince: Date.now(),
-            },
-    }));
+    startFocus(task);
     setClock(Date.now());
+    setCompletion(null);
     setPage("Foco");
   }
   function pause() {
     update((d) => ({
       ...d,
       focus: d.focus
-        ? { ...d.focus, elapsedSeconds: elapsed, runningSince: null }
+        ? {
+            ...d.focus,
+            elapsedSeconds: actualFocusSeconds(d.focus),
+            runningSince: null,
+          }
         : null,
     }));
   }
-  function replan() {
-    const result = replanDay(data.tasks, data.dailyMinutes, now);
-    update((d) => ({ ...d, deferredIds: [] }));
-    setNotice(
-      `Rota recalculada: ${result.today.length} tarefas cabem no seu dia. Os prazos continuam iguais.`,
+  function resume() {
+    update((d) => ({
+      ...d,
+      focus: d.focus ? { ...d.focus, runningSince: Date.now() } : null,
+    }));
+    setClock(Date.now());
+  }
+  function timelineFor(value: AppData) {
+    const budget = Math.max(0, value.dailyMinutes - usedStudyMinutes(value));
+    const route = generateStudyRoute(
+      value.tasks,
+      budget,
+      new Date(),
+      value.deferredIds,
+      value.settings.breakMinutes,
     );
+    return generateDailyTimeline(
+      route.today,
+      value.routeStartAt,
+      budget,
+      value.settings.breakMinutes,
+    );
+  }
+  function replan() {
+    const next = {
+      ...data,
+      deferredIds: [],
+      routeStartAt: new Date(
+        Math.max(Date.now(), new Date(data.routeStartAt).getTime()),
+      ).toISOString(),
+    };
+    setComparison({ before: timelineFor(data), after: timelineFor(next) });
+    update(() => next);
+  }
+  function postpone(task: Task) {
+    const next = deferTask(data, task.id);
+    setComparison({ before: timelineFor(data), after: timelineFor(next) });
+    defer(task.id);
+    setPage("Hoje");
+  }
+  function openDebug(task: Task) {
+    if (session && session.taskId !== task.id) {
+      setNotice("Sua sessão atual está em Foco. Vamos cuidar dela primeiro.");
+      setPage("Foco");
+      return;
+    }
+    if (session) pause();
+    setDebugTask(task);
+    setBlocker(null);
+    setStuckEventId(logStuck(task));
+  }
+  function shortSession() {
+    if (!debugTask) return;
+    const task = debugTask;
+    update((d) => {
+      const next = d.focus ? archiveFocus(d, "ended") : d;
+      return {
+        ...next,
+        focus: {
+          id: crypto.randomUUID(),
+          taskId: task.id,
+          startedAt: new Date().toISOString(),
+          durationSeconds: 600,
+          elapsedSeconds: 0,
+          runningSince: Date.now(),
+        },
+      };
+    });
+    setDebugTask(null);
+    setCompletion(null);
+    setClock(Date.now());
+    setPage("Foco");
+  }
+  function divide() {
+    if (!debugTask) return;
+    const information = blocker === "information";
+    setEditing({
+      ...debugTask,
+      id: crypto.randomUUID(),
+      title: information
+        ? `Descobrir o que falta: ${debugTask.title}`
+        : `Primeiro passo: ${debugTask.title}`,
+      description: information
+        ? `Confirmar informações necessárias para: ${debugTask.title}`
+        : `Parte de: ${debugTask.title}. Defina uma ação pequena que caiba em 10 minutos.`,
+      estimatedMinutes: 10,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      completedAt: undefined,
+    });
+    setDebugTask(null);
   }
   function row(task: Task, index?: number) {
     return (
       <TaskRow
         key={task.id}
         task={task}
-        index={index}
         subject={subject(task.subjectId)}
+        index={index}
         onToggle={() => toggleTask(task.id)}
         onStart={() => start(task)}
         onEdit={() => setEditing(task)}
@@ -170,81 +323,67 @@ export default function App() {
       />
     );
   }
-  function openDebug() {
-    pause();
-    setBlocker(null);
-    setDebug(true);
-  }
-  function applyBlocker() {
-    if (blocker === null || !activeTask) return;
-    const selected = blockers[blocker];
-    if (selected.type === "short") {
-      update((d) => ({
-        ...d,
-        focus: {
-          taskId: activeTask.id,
-          durationSeconds: 600,
-          elapsedSeconds: 0,
-          runningSince: Date.now(),
-        },
-      }));
-      setNotice("Uma sessão de 10 minutos. Só o próximo passo.");
-    } else if (selected.type === "defer") {
-      update((d) => ({
-        ...d,
-        focus: null,
-        deferredIds: [
-          ...d.deferredIds.filter((id) => id !== activeTask.id),
-          activeTask.id,
-        ],
-      }));
-      setPage("Hoje");
-      setNotice("Tarefa movida para depois na rota. O prazo foi mantido.");
-    } else {
-      setEditing({
-        ...activeTask,
-        id: crypto.randomUUID(),
-        title:
-          selected.type === "info"
-            ? `Descobrir o que falta: ${activeTask.title}`
-            : `Primeiro passo: ${activeTask.title}`,
-        description: `Parte de: ${activeTask.title}\n${selected.suggestion}`,
-        estimatedMinutes: 10,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-        completedAt: undefined,
-      });
-    }
-    setDebug(false);
-  }
-  const hour = now.getHours();
+  const commands: Command[] = [
+    {
+      id: "new",
+      label: "Nova tarefa",
+      hint: "Ctrl / ⌘ N",
+      run: () => setEditing(null),
+    },
+    { id: "today", label: "Ir para Hoje", run: () => setPage("Hoje") },
+    {
+      id: "todo",
+      label: "Ir para To-do",
+      run: () => {
+        setSubjectFilter("all");
+        setPage("To-do");
+      },
+    },
+    { id: "radar", label: "Ir para Radar", run: () => setPage("Radar") },
+    {
+      id: "focus",
+      label: "Iniciar foco",
+      run: () => (recommended ? start(recommended) : setPage("Foco")),
+    },
+    { id: "theme", label: "Trocar tema", run: toggleTheme },
+    { id: "settings", label: "Configurações", run: () => setSettings(true) },
+  ];
   const greeting =
-    hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
+    now.getHours() < 12
+      ? "Bom dia"
+      : now.getHours() < 18
+        ? "Boa tarde"
+        : "Boa noite";
+  if (loading)
+    return (
+      <div className="app-loading" role="status">
+        <Orbit size={30} strokeWidth={1.3} />
+        <span>Abrindo seu espaço…</span>
+      </div>
+    );
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell desktop-shell ${isTauri() ? "native-app" : ""} ${isTauri() && /Mac/.test(navigator.platform) ? "mac-app" : ""} ${page === "Foco" ? "in-focus" : ""}`}
+    >
       <aside className="sidebar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setPage("Hoje");
-          }}
-        >
-          <Orbit size={29} strokeWidth={1.5} />
-          <span>
-            orbit<span className="brand-dot">.</span>
-          </span>
-        </a>
-        <div className="workspace-label">SEU ESPAÇO DE ESTUDO</div>
+        <button className="brand" onClick={() => setPage("Hoje")}>
+          <Orbit size={25} strokeWidth={1.4} />
+          <span>Orbit</span>
+          <span className="desktop-tag">ESTUDO</span>
+        </button>
+        <button className="sidebar-new" onClick={() => setEditing(null)}>
+          <Plus size={16} />
+          Nova tarefa<kbd>N</kbd>
+        </button>
         <nav aria-label="Navegação principal">
           {pages.map(({ name, icon: Icon }) => (
             <button
               key={name}
               className={`nav-item ${page === name ? "active" : ""}`}
+              aria-current={page === name ? "page" : undefined}
               onClick={() => setPage(name)}
             >
-              <Icon size={19} />
+              <Icon size={17} strokeWidth={1.7} />
               <span>{name}</span>
               {name === "Radar" && risks.length > 0 && (
                 <span className="nav-count">{risks.length}</span>
@@ -256,17 +395,18 @@ export default function App() {
         <div className="subjects-heading">
           <span>MATÉRIAS</span>
           <button
-            aria-label="Criar matéria"
             className="icon-button"
+            aria-label="Criar matéria"
             onClick={() => setSubjectModal(true)}
           >
-            <Plus size={15} />
+            <Plus size={13} />
           </button>
         </div>
         <div className="subjects-list">
           {data.subjects.map((s) => (
             <button
               key={s.id}
+              title={s.name}
               onClick={() => {
                 setSubjectFilter(s.id);
                 setPage("To-do");
@@ -278,64 +418,52 @@ export default function App() {
           ))}
         </div>
         <div className="sidebar-bottom">
-          <div className="quiet-note">
-            <Sprout size={20} />
-            <p>
-              Um passo de cada vez.
-              <br />
-              <span>Você não precisa fazer tudo hoje.</span>
-            </p>
-          </div>
-          <button
-            className="theme-switch"
-            onClick={() =>
-              update((d) => ({
-                ...d,
-                theme: d.theme === "dark" ? "light" : "dark",
-              }))
-            }
-          >
-            {data.theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-            <span>{data.theme === "dark" ? "Modo claro" : "Modo escuro"}</span>
+          <button className="sidebar-command" onClick={() => setPalette(true)}>
+            <Search size={15} />
+            <span>Ações rápidas</span>
+            <kbd>{/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd>
           </button>
-          <div className="profile">
-            <span className="avatar">B</span>
-            <div>
-              <strong>Bruno</strong>
-              <span>Meu espaço pessoal</span>
-            </div>
-            <span className="profile-dot" />
+          <div className="sidebar-settings">
+            <button
+              className="icon-button"
+              aria-label="Configurações"
+              onClick={() => setSettings(true)}
+            >
+              <Settings2 size={16} />
+            </button>
+            <span>{data.settings.name}</span>
+            <button
+              className="icon-button"
+              aria-label="Alternar tema"
+              onClick={toggleTheme}
+            >
+              {data.theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
           </div>
         </div>
       </aside>
       <main>
-        <header className="topbar">
-          <div>
-            <span className="breadcrumb">Meu espaço</span>
-            <ChevronRight size={14} />
-            <span>{page}</span>
-          </div>
-          <span className="topbar-date">
+        <header className="topbar" data-tauri-drag-region>
+          <span className="desktop-page-label" data-tauri-drag-region>
+            {page}
+          </span>
+          <span className="topbar-date" data-tauri-drag-region>
             {now.toLocaleDateString("pt-BR", {
-              weekday: "long",
+              weekday: "short",
               day: "numeric",
-              month: "long",
+              month: "short",
             })}
           </span>
           <button
-            className="icon-button mobile-theme"
-            aria-label="Alternar tema"
-            onClick={() =>
-              update((d) => ({
-                ...d,
-                theme: d.theme === "dark" ? "light" : "dark",
-              }))
-            }
+            className="command-trigger"
+            aria-label="Abrir ações rápidas"
+            onClick={() => setPalette(true)}
           >
-            {data.theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            <Search size={15} />
+            <kbd>{/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd>
           </button>
           <button className="button small" onClick={() => setEditing(null)}>
-            <Plus size={16} />
+            <Plus size={14} />
             Nova tarefa
           </button>
         </header>
@@ -343,9 +471,7 @@ export default function App() {
           <div className="storage-error" role="alert">
             {error}
             {!canSave && (
-              <button onClick={enableSaving}>
-                Substituir dados locais pelo exemplo
-              </button>
+              <button onClick={enableSaving}>Substituir pelo exemplo</button>
             )}
           </div>
         )}
@@ -360,15 +486,21 @@ export default function App() {
               greeting={greeting}
               subject={subject}
               replan={replan}
-              setAvailable={setAvailable}
-              setTimeModal={setTimeModal}
               start={start}
-              setEditing={setEditing}
-              setSubjectFilter={setSubjectFilter}
-              setPage={setPage}
-              row={row}
+              onDefer={postpone}
+              onDebug={openDebug}
+              onTime={() => {
+                setAvailable(data.dailyMinutes);
+                setTimeModal(true);
+              }}
+              onTasks={() => {
+                setSubjectFilter("all");
+                setPage("To-do");
+              }}
+              onRadar={() => setPage("Radar")}
+              availableMinutes={availableMinutes}
             />
-          )}
+          )}{" "}
           {page === "To-do" && (
             <TodoPage
               data={data}
@@ -382,33 +514,39 @@ export default function App() {
               setEditing={setEditing}
               setSubjectModal={setSubjectModal}
             />
-          )}
+          )}{" "}
           {page === "Radar" && (
             <RadarPage
               data={data}
-              plan={plan}
               now={now}
-              risks={risks}
               row={row}
               setSubjectFilter={setSubjectFilter}
               setPage={setPage}
             />
-          )}
+          )}{" "}
           {page === "Foco" && (
             <FocusPage
               activeTask={activeTask}
               session={session}
               subject={subject}
-              remaining={remaining}
-              progress={progress}
+              actualSeconds={elapsed}
               pause={pause}
-              update={update}
-              toggleTask={toggleTask}
-              setNotice={setNotice}
-              setPage={setPage}
-              openDebug={openDebug}
+              resume={resume}
+              onComplete={() => {
+                if (!activeTask) return;
+                setCompletion(activeTask.title);
+                toggleTask(activeTask.id);
+              }}
+              onEnd={() => {
+                endFocus();
+                setPage("Hoje");
+                setNotice("Sessão registrada. Sua tarefa continua pendente.");
+              }}
+              openDebug={() => activeTask && openDebug(activeTask)}
               recommended={recommended}
               start={start}
+              onTasks={() => setPage("To-do")}
+              completion={completion}
             />
           )}
         </div>
@@ -534,38 +672,49 @@ export default function App() {
           </form>
         </Modal>
       )}
-      {debug && (
-        <Modal title="O que está acontecendo?" onClose={() => setDebug(false)}>
-          <p className="modal-copy">
-            Travou? Vamos diminuir o próximo passo. Seu timer está pausado.
-          </p>
-          <div className="blocker-options">
-            {blockers.map((b, i) => (
-              <button
-                key={b.title}
-                className={blocker === i ? "selected" : ""}
-                onClick={() => setBlocker(i)}
-              >
-                <span>{b.title}</span>
-                <ChevronRight size={17} />
-              </button>
-            ))}
-          </div>
-          {blocker !== null && (
-            <div className="debug-suggestion">
-              <Sprout size={22} />
-              <p>{blockers[blocker].suggestion}</p>
-              <button className="button primary" onClick={applyBlocker}>
-                {blockers[blocker].action}
-                <ArrowRight size={16} />
-              </button>
-            </div>
-          )}
-        </Modal>
+
+      {palette && (
+        <CommandPalette commands={commands} onClose={() => setPalette(false)} />
+      )}
+      {settings && (
+        <SettingsPanel
+          data={data}
+          onSave={(next) => update(() => next)}
+          onReplace={(next) => {
+            update(() => next);
+            setCompletion(null);
+            setNotice("Cópia importada. Sua rota está pronta.");
+          }}
+          onClose={() => setSettings(false)}
+        />
+      )}
+      {debugTask && (
+        <DebuggerPanel
+          selected={blocker}
+          onSelect={(reason) => {
+            setBlocker(reason);
+            selectReason(stuckEventId, reason);
+          }}
+          onClose={() => setDebugTask(null)}
+          onShort={shortSession}
+          onDivide={divide}
+          onReplan={() => {
+            const task = debugTask;
+            setDebugTask(null);
+            postpone(task);
+          }}
+        />
+      )}
+      {comparison && (
+        <RouteComparison
+          before={comparison.before}
+          after={comparison.after}
+          onClose={() => setComparison(null)}
+        />
       )}
       {notice && (
         <div className="toast" role="status">
-          <Check size={17} />
+          <Check size={16} />
           {notice}
           <button
             className="icon-button"

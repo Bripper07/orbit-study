@@ -1,108 +1,100 @@
 import type { AppData, Task, Page } from "../types";
 import type { ReactNode } from "react";
-import { Radar, ArrowUpRight, Check, CircleHelp, BookOpen } from "lucide-react";
-import {
-  generateDailyPlan,
-  daysUntil,
-  calculateTaskRisk,
-} from "../domain/planner";
+import { ArrowUpRight, Check, Compass, Lightbulb } from "lucide-react";
+import { daysUntil, calculateTaskRisk } from "../domain/planner";
+import { getInsights } from "../domain/insights";
 interface Props {
   data: AppData;
-  plan: ReturnType<typeof generateDailyPlan>;
   now: Date;
-  risks: Task[];
-  row: (task: Task, index?: number) => ReactNode;
-  setSubjectFilter: (value: string) => void;
+  row: (task: Task) => ReactNode;
+  setSubjectFilter: (id: string) => void;
   setPage: (page: Page) => void;
 }
 export function RadarPage({
   data,
-  plan,
   now,
-  risks,
   row,
   setSubjectFilter,
   setPage,
 }: Props) {
+  const pending = data.tasks.filter((t) => t.status === "pending");
+  const insights = getInsights(data);
+  const inactive = data.subjects.filter(
+    (s) =>
+      !data.memory.sessions.some(
+        (f) =>
+          f.subjectId === s.id &&
+          f.actualSeconds >= 60 &&
+          new Date(f.endedAt).getTime() >= now.getTime() - 7 * 86400000,
+      ) &&
+      !data.tasks.some(
+        (t) =>
+          t.subjectId === s.id &&
+          t.completedAt &&
+          new Date(t.completedAt).getTime() >= now.getTime() - 7 * 86400000,
+      ),
+  );
+  const groups = [
+    {
+      title: "ATRASADO",
+      tone: "overdue",
+      tasks: pending.filter((t) => daysUntil(t.dueDate, now) < 0),
+    },
+    {
+      title: "ALTO RISCO",
+      tone: "high",
+      tasks: pending.filter(
+        (t) =>
+          daysUntil(t.dueDate, now) >= 0 &&
+          calculateTaskRisk(t, now) === "alto",
+      ),
+    },
+    {
+      title: "PRAZOS PRÓXIMOS",
+      tone: "near",
+      tasks: pending.filter(
+        (t) =>
+          daysUntil(t.dueDate, now) >= 0 &&
+          daysUntil(t.dueDate, now) <= 7 &&
+          calculateTaskRisk(t, now) !== "alto",
+      ),
+    },
+  ];
   return (
-    <>
+    <div className="radar-desktop">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">UM OLHAR UM POUCO MAIS À FRENTE</div>
-          <h1>
-            Seu radar<span className="greeting-dot">.</span>
-          </h1>
-          <p>Perceba o que precisa de atenção antes de virar urgência.</p>
+          <h1>Radar</h1>
+          <p>O que merece sua atenção, antes do próximo passo.</p>
         </div>
-        <Radar className="page-symbol" size={52} strokeWidth={1} />
+        <Compass size={26} strokeWidth={1.3} className="muted" />
       </div>
-      <div className="radar-stats">
-        <div>
-          <span>Em atraso</span>
-          <strong>
-            {plan.ordered.filter((t) => daysUntil(t.dueDate, now) < 0).length}
-          </strong>
+      {groups
+        .filter((g) => g.tasks.length)
+        .map((group) => (
+          <section
+            className={`attention-section ${group.tone}`}
+            key={group.title}
+          >
+            <h2>
+              <span className="attention-dot" />
+              {group.title}
+              <span>{group.tasks.length}</span>
+            </h2>
+            <div className="task-list">{group.tasks.map(row)}</div>
+          </section>
+        ))}
+      {!pending.length && (
+        <div className="empty-inline">
+          <Check size={17} />
+          Nenhum prazo pendente. Seu radar está tranquilo.
         </div>
-        <div>
-          <span>Próximos 7 dias</span>
-          <strong>
-            {
-              plan.ordered.filter(
-                (t) =>
-                  daysUntil(t.dueDate, now) >= 0 &&
-                  daysUntil(t.dueDate, now) <= 7,
-              ).length
-            }
-          </strong>
-        </div>
-        <div>
-          <span>Risco alto</span>
-          <strong>{risks.length}</strong>
-        </div>
-      </div>
-      {[
-        { title: "Precisam de atenção", tasks: risks },
-        {
-          title: "Prazos próximos",
-          tasks: plan.ordered.filter(
-            (t) =>
-              daysUntil(t.dueDate, now) >= 0 &&
-              daysUntil(t.dueDate, now) <= 7 &&
-              calculateTaskRisk(t, now) !== "alto",
-          ),
-        },
-      ].map((group) => (
-        <section className="radar-section" key={group.title}>
-          <h2>{group.title}</h2>
-          <div className="task-list">
-            {group.tasks.length ? (
-              group.tasks.map((t) => row(t))
-            ) : (
-              <div className="empty-inline">
-                <Check size={17} />
-                Tudo tranquilo nesta área.
-              </div>
-            )}
-          </div>
-        </section>
-      ))}
-      <section className="radar-section">
-        <h2>Matérias sem atividade recente</h2>
-        <p className="muted">Sem tarefas concluídas nos últimos 7 dias.</p>
-        <div className="subject-cards">
-          {data.subjects
-            .filter(
-              (s) =>
-                !data.tasks.some(
-                  (t) =>
-                    t.subjectId === s.id &&
-                    t.status === "completed" &&
-                    t.completedAt &&
-                    new Date(t.completedAt).getTime() >=
-                      now.getTime() - 7 * 86400000,
-                ),
-            )
-            .map((s) => (
+      )}
+      {inactive.length > 0 && (
+        <section className="attention-section">
+          <h2>ATENÇÃO</h2>
+          <div className="inactive-subjects">
+            {inactive.map((s) => (
               <button
                 key={s.id}
                 onClick={() => {
@@ -110,21 +102,43 @@ export function RadarPage({
                   setPage("To-do");
                 }}
               >
-                <BookOpen style={{ color: s.color }} size={21} />
-                <span>{s.name}</span>
-                <ArrowUpRight size={16} />
+                <i style={{ background: s.color }} />
+                <span>
+                  <strong>{s.name} ficou fora das sessões recentes.</strong>
+                  <small>
+                    Sem estudo registrado nos últimos 7 dias. Vale reservar um
+                    próximo passo?
+                  </small>
+                </span>
+                <ArrowUpRight size={15} />
               </button>
             ))}
-        </div>
+          </div>
+        </section>
+      )}
+      <section className="attention-section insight-section">
+        <h2>
+          <Lightbulb size={15} />
+          PERCEPÇÕES DO SEU RITMO
+        </h2>
+        {insights.length ? (
+          insights.map((insight) => (
+            <div className="insight" key={insight.id}>
+              <p>{insight.text}</p>
+              <span>{insight.evidence}</span>
+            </div>
+          ))
+        ) : (
+          <p className="quiet-empty">
+            Suas sessões vão formar um histórico. As primeiras percepções
+            aparecem quando houver observações suficientes.
+          </p>
+        )}
       </section>
-      <div className="radar-explanation">
-        <CircleHelp size={17} />
-        <p>
-          O risco considera prazo, prioridade e duração. A viabilidade compara o
-          tempo disponível com todas as tarefas pendentes; não é uma previsão de
-          desempenho.
-        </p>
-      </div>
-    </>
+      <p className="radar-footnote">
+        Risco é uma indicação de atenção baseada em prazo, prioridade e duração.
+        Seus dados ficam neste dispositivo.
+      </p>
+    </div>
   );
 }

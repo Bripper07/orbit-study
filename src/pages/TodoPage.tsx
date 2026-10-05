@@ -25,6 +25,12 @@ export function TodoPage({
   setEditing,
   setSubjectModal,
 }: Props) {
+  const matches = data.tasks.filter(
+    (t) =>
+      (filter === "all" || t.status === filter) &&
+      (subjectFilter === "all" || t.subjectId === subjectFilter) &&
+      t.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+  );
   return (
     <>
       <div className="page-heading">
@@ -84,13 +90,19 @@ export function TodoPage({
         </select>
       </div>
       <div className="task-list">
-        {data.tasks
-          .filter(
-            (t) =>
-              (filter === "all" || t.status === filter) &&
-              (subjectFilter === "all" || t.subjectId === subjectFilter) &&
-              t.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-          )
+        {data.subjects
+          .filter((s) => matches.some((t) => t.subjectId === s.id))
+          .map((s) => (
+            <section key={s.id}>
+              <h2 className="todo-subject-heading">
+                <i style={{ background: s.color }} />
+                {s.name}
+              </h2>
+              {matches.filter((t) => t.subjectId === s.id).map((t) => row(t))}
+            </section>
+          ))}
+        {matches
+          .filter((t) => !data.subjects.some((s) => s.id === t.subjectId))
           .map((t) => row(t))}
         {!data.tasks.some(
           (t) =>

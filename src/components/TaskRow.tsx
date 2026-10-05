@@ -52,6 +52,15 @@ export function TaskRow({
         <Clock3 size={14} />
         {task.estimatedMinutes} min
       </span>
+      {!done && (
+        <span className={`priority-tag priority-${task.priority}`}>
+          {task.priority === "high"
+            ? "Alta"
+            : task.priority === "medium"
+              ? "Média"
+              : "Baixa"}
+        </span>
+      )}
       <div className="row-actions">
         {!done && (
           <button

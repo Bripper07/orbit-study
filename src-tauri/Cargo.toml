@@ -1,0 +1,20 @@
+[package]
+name = "orbit"
+version = "0.2.0"
+description = "A calm desktop study companion"
+authors = ["Bripper07"]
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "orbit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

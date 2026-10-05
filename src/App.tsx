@@ -145,6 +145,9 @@ export default function App() {
         .catch(() => {});
   }, [data.theme]);
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [page]);
+  useEffect(() => {
     const id = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
